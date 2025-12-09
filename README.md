@@ -7,9 +7,6 @@ A premium on-device LLM chat application for Android, powered by **Google LiteRT
 *   **Optimized**: Built with MatFormer architecture and Per-Layer Embedding (PLE) for high-speed edge inference.
 *   **Performance**: Capable of 30-50+ tokens/sec on modern mobile processors.
 
-<p align="center">
-  <img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="100" />
-</p>
 
 ## 🚀 Features
 
