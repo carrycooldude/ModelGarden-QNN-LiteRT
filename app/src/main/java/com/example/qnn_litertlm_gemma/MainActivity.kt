@@ -4,17 +4,17 @@ import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
+import android.widget.ArrayAdapter
+import android.widget.EditText
+import android.widget.Spinner
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.qnn_litertlm_gemma.databinding.ActivityMainBinding
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.onCompletion
-import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
-import java.util.Date
 
 class MainActivity : AppCompatActivity() {
 
@@ -25,6 +25,8 @@ class MainActivity : AppCompatActivity() {
     
     // Store conversation history
     private val messages = mutableListOf<ChatMessage>()
+    
+    private var currentModel: ModelConfig? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,12 +35,71 @@ class MainActivity : AppCompatActivity() {
 
         liteRTLMManager = LiteRTLMManager.getInstance(this)
         modelDownloader = ModelDownloader(this)
+        
+        // Setup Menu for Token
+        binding.toolbar.inflateMenu(R.menu.menu_main)
+        binding.toolbar.setOnMenuItemClickListener {
+            when (it.itemId) {
+                R.id.action_set_token -> {
+                    showTokenDialog()
+                    true
+                }
+                else -> false
+            }
+        }
 
         setupRecyclerView()
         setupInput()
+        setupModelSpinner()
+    }
+    
+    private fun showTokenDialog() {
+        val input = EditText(this)
+        input.hint = "hf_..."
+        val currentToken = modelDownloader.getToken()
+        if (!currentToken.isNullOrBlank()) {
+            input.setText(currentToken)
+        }
         
-        // Start initialization process
-        checkAndInitialize()
+        AlertDialog.Builder(this)
+            .setTitle("Set Hugging Face Token")
+            .setMessage("Enter your API token to access gated models.")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val token = input.text.toString().trim()
+                modelDownloader.saveToken(token)
+                Toast.makeText(this, "Token saved!", Toast.LENGTH_SHORT).show()
+                // Retry download if current model failed?
+                if (currentModel != null && !modelDownloader.isModelDownloaded(currentModel!!)) {
+                   checkAndInitialize(currentModel!!)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun setupModelSpinner() {
+        val models = ModelDownloader.AVAILABLE_MODELS
+        val adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            models.map { it.name }
+        )
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        val spinner = binding.toolbar.findViewById<Spinner>(R.id.spinnerModel)
+        spinner.adapter = adapter
+        
+        spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val selectedModel = models[position]
+                if (currentModel != selectedModel) {
+                    currentModel = selectedModel
+                    checkAndInitialize(selectedModel)
+                }
+            }
+
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
     }
     
     private fun setupRecyclerView() {
@@ -84,24 +145,27 @@ class MainActivity : AppCompatActivity() {
         binding.buttonSend.isEnabled = false
     }
     
-    private fun checkAndInitialize() {
+    private fun checkAndInitialize(modelConfig: ModelConfig) {
         lifecycleScope.launch {
-            if (modelDownloader.isModelDownloaded()) {
-                initializeEngine()
+            // Reset UI state for new model
+            binding.cardInput.visibility = View.GONE
+            binding.progressBarLoading.visibility = View.VISIBLE
+            binding.textLoadingStatus.visibility = View.VISIBLE
+            binding.textLoadingStatus.text = "Checking ${modelConfig.name}..."
+            
+            if (modelDownloader.isModelDownloaded(modelConfig)) {
+                initializeEngine(modelConfig)
             } else {
-                downloadModel()
+                downloadModel(modelConfig)
             }
         }
     }
     
-    private fun downloadModel() {
+    private fun downloadModel(modelConfig: ModelConfig) {
         lifecycleScope.launch {
-            binding.progressBarLoading.visibility = View.VISIBLE
-            binding.textLoadingStatus.visibility = View.VISIBLE
-            binding.textLoadingStatus.text = "Downloading Gemma3n model..."
-            binding.cardInput.visibility = View.GONE
+            binding.textLoadingStatus.text = "Downloading ${modelConfig.name}..."
             
-            modelDownloader.downloadModel().collect { progress ->
+            modelDownloader.downloadModel(modelConfig).collect { progress ->
                 when (progress) {
                     is DownloadProgress.Started -> {
                          binding.textLoadingStatus.text = "Starting download..."
@@ -111,32 +175,51 @@ class MainActivity : AppCompatActivity() {
                     }
                     is DownloadProgress.Complete -> {
                         binding.textLoadingStatus.text = "Download complete!"
-                        initializeEngine()
+                        initializeEngine(modelConfig)
                     }
                     is DownloadProgress.Error -> {
                         binding.progressBarLoading.visibility = View.GONE
                         binding.textLoadingStatus.text = "Error: ${progress.message}"
-                        Toast.makeText(this@MainActivity, "Download failed: ${progress.message}", Toast.LENGTH_LONG).show()
+                        
+                        // Suggest token if 401/403 or generic error
+                        if (progress.message.contains("401") || progress.message.contains("403") || progress.message.contains("404")) {
+                             AlertDialog.Builder(this@MainActivity)
+                                .setTitle("Download Error")
+                                .setMessage("Failed: ${progress.message}.\n\nDo you need to set a Hugging Face Token?")
+                                .setPositiveButton("Set Token") { _, _ -> showTokenDialog() }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        } else {
+                             Toast.makeText(this@MainActivity, "Download failed: ${progress.message}", Toast.LENGTH_LONG).show()
+                        }
                     }
                 }
             }
         }
     }
     
-    private fun initializeEngine() {
+    private fun initializeEngine(modelConfig: ModelConfig) {
         lifecycleScope.launch {
             binding.progressBarLoading.visibility = View.VISIBLE
             binding.textLoadingStatus.visibility = View.VISIBLE
-            binding.textLoadingStatus.text = "Initializing LiteRT-LM Engine (this may take a moment)..."
+            binding.textLoadingStatus.text = "Initializing ${modelConfig.name}..."
             
-            val result = liteRTLMManager.initialize(modelDownloader.getModelPath())
+            val startTime = System.currentTimeMillis()
+            
+            val result = liteRTLMManager.initialize(
+                modelDownloader.getModelPath(modelConfig),
+                modelConfig.systemPrompt
+            )
+            
+            val loadTime = System.currentTimeMillis() - startTime
             
             binding.progressBarLoading.visibility = View.GONE
             binding.textLoadingStatus.visibility = View.GONE
             
             if (result.isSuccess) {
                 binding.cardInput.visibility = View.VISIBLE
-                addSystemMessage("Gemma3n initialized and ready. Chat with me!")
+                addSystemMessage("${modelConfig.name} initialized. Ready to chat!")
+                binding.textBenchmark.text = "Init Time: ${loadTime}ms | Model: ${modelConfig.name}"
             } else {
                 val error = result.exceptionOrNull()?.message ?: "Unknown error"
                 binding.textLoadingStatus.visibility = View.VISIBLE
@@ -160,6 +243,9 @@ class MainActivity : AppCompatActivity() {
         
         lifecycleScope.launch {
             var fullResponse = ""
+            val requestStartTime = System.nanoTime()
+            var firstTokenTime = 0L
+            var tokenCount = 0 // Approximate 
             
             try {
                 liteRTLMManager.sendMessage(text)
@@ -172,19 +258,15 @@ class MainActivity : AppCompatActivity() {
                         updateMessages()
                     }
                     .collect { messageChunk ->
-                        // Append text chunk
-                        // Note: Depending on the API, messageChunk might be the full text or just a diff.
-                        // Based on the docs: "Asynchronous call for streaming responses."
-                        // Usually Flow emits the *delta* or the *accumulated* message?
-                        // Let's assume it emits Message objects which might contain the diff or accumulated.
-                        // The docs example says: .collect { print(it) }
-                        // Usually LiteRT-LM emits chunks. let's treat it as chunks.
-                        // Wait, looking at docs: "returns a Kotlin Flow for streaming responses."
-                        // and collect { print(it.toString()) }
-                        // Let's assume it converts nicely to string.
+                        if (firstTokenTime == 0L) {
+                            firstTokenTime = System.nanoTime()
+                        }
                         
                         val chunkText = messageChunk.toString()
                         fullResponse += chunkText
+                        // Estimate token count roughly (e.g. 4 chars per token)
+                        // Ideally we'd use a tokenizer, but for benchmark approximation:
+                        tokenCount += chunkText.length / 4 + 1
                         
                         messages[assistantMessageIndex] = assistantMessage.copy(
                             content = fullResponse,
@@ -200,6 +282,19 @@ class MainActivity : AppCompatActivity() {
                     isStreaming = false
                 )
                 updateMessages()
+                
+                // Final Stats
+                val endTime = System.nanoTime()
+                val ttftMs = (firstTokenTime - requestStartTime) / 1_000_000
+                val generationTimeMs = (endTime - firstTokenTime) / 1_000_000
+                // simple TPS calculation
+                val tokens = fullResponse.length / 4.0 // Approx
+                val tps = if (generationTimeMs > 0) (tokens / (generationTimeMs / 1000.0)) else 0.0
+                
+                binding.textBenchmark.text = String.format(
+                    "TTFT: %dms | Speed: %.2f t/s (approx) | Len: %d", 
+                    ttftMs, tps, fullResponse.length
+                )
                 
             } catch (e: Exception) {
                 messages[assistantMessageIndex] = assistantMessage.copy(

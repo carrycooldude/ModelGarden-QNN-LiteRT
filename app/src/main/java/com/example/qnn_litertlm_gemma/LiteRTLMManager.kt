@@ -6,13 +6,11 @@ import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
-import com.google.ai.edge.litertlm.LogSeverity
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.SamplerConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /**
  * Singleton manager for LiteRT-LM Engine
@@ -26,7 +24,6 @@ class LiteRTLMManager private constructor(private val context: Context) {
     
     companion object {
         private const val TAG = "LiteRTLMManager"
-        private const val MODEL_FILENAME = "gemma3n.litertlm"
         
         @Volatile
         private var INSTANCE: LiteRTLMManager? = null
@@ -42,33 +39,35 @@ class LiteRTLMManager private constructor(private val context: Context) {
      * Initialize the LiteRT-LM engine with the model
      * This should be called on a background thread as it can take several seconds
      */
-    suspend fun initialize(modelPath: String): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun initialize(modelPath: String, systemPrompt: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             if (isInitialized) {
-                Log.d(TAG, "Engine already initialized")
-                return@withContext Result.success(Unit)
+                Log.d(TAG, "Re-initializing engine...")
+                cleanup()
             }
             
-            Log.d(TAG, "Initializing LiteRT-LM engine...")
+            Log.d(TAG, "Initializing LiteRT-LM engine with path: $modelPath")
             
-            // Try GPU first, fallback to CPU
-            val backend = detectBestBackend()
-            Log.d(TAG, "Using backend: $backend")
+            // Try detected backend first (GPU)
+            val preferredBackend = detectBestBackend()
+            Log.d(TAG, "Using preferred backend: $preferredBackend")
             
-            val engineConfig = EngineConfig(
-                modelPath = modelPath,
-                backend = backend,
-                cacheDir = context.cacheDir.path,
-                visionBackend = backend,  // Gemma3n supports multimodal
-                audioBackend = Backend.CPU
-            )
-            
-            engine = Engine(engineConfig)
-            engine?.initialize()
+            try {
+                initializeEngineWithBackend(modelPath, preferredBackend)
+            } catch (e: Exception) {
+                if (preferredBackend == Backend.GPU) {
+                    Log.w(TAG, "GPU initialization failed, falling back to CPU", e)
+                    // If GPU fails, cleanup (just in case) and retry with CPU
+                    cleanup()
+                    initializeEngineWithBackend(modelPath, Backend.CPU)
+                } else {
+                    throw e
+                }
+            }
             
             // Create a conversation with default configuration
             val conversationConfig = ConversationConfig(
-                systemMessage = Message.of("You are Gemma, a helpful AI assistant powered by Google's LiteRT-LM running on device."),
+                systemMessage = Message.of(systemPrompt ?: "You are a helpful AI assistant powered by LiteRT-LM running on device."),
                 samplerConfig = SamplerConfig(
                     topK = 40,
                     topP = 0.95,
@@ -85,6 +84,18 @@ class LiteRTLMManager private constructor(private val context: Context) {
             Log.e(TAG, "Failed to initialize LiteRT-LM", e)
             Result.failure(e)
         }
+    }
+    
+    private fun initializeEngineWithBackend(modelPath: String, backend: Backend) {
+        // Use simpler config to avoid potential issues with multimodal backends on text-only models
+        val engineConfig = EngineConfig(
+            modelPath = modelPath,
+            backend = backend,
+            cacheDir = context.cacheDir.path
+        )
+        
+        engine = Engine(engineConfig)
+        engine?.initialize()
     }
     
     /**
@@ -105,7 +116,6 @@ class LiteRTLMManager private constructor(private val context: Context) {
      * Detect the best available backend
      */
     private fun detectBestBackend(): Backend {
-        // Try GPU first (which includes QNN/NPU support via delegates if applicable, but explicit NPU backend failed for this model)
         return try {
             Log.d(TAG, "Attempting to use GPU backend...")
             Backend.GPU
@@ -113,20 +123,6 @@ class LiteRTLMManager private constructor(private val context: Context) {
             Log.w(TAG, "GPU backend not available, falling back to CPU", e)
             Backend.CPU
         }
-    }
-    
-    /**
-     * Get the model file path
-     */
-    fun getModelPath(): String {
-        return File(context.filesDir, MODEL_FILENAME).absolutePath
-    }
-    
-    /**
-     * Check if model file exists
-     */
-    fun isModelDownloaded(): Boolean {
-        return File(getModelPath()).exists()
     }
     
     /**
