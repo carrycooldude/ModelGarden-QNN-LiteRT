@@ -19,6 +19,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "QNN-LiteRTLM-Gemma"
+rootProject.name = "ModelGarden-QNN-LiteRT"
 include(":app")
  

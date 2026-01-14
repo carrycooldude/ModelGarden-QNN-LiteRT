@@ -1,4 +1,4 @@
-# Gemma3n-QNN-LiteRT Android Chat
+# ModelGarden-QNN-LiteRT Android Chat
 
 A premium on-device LLM chat application for Android, powered by **Google LiteRT (formerly TensorFlow Lite)**. Now supporting multiple Small Language Models (SLMs) including **Gemma 3n** and **Qwen 3**.
 
@@ -40,8 +40,8 @@ A premium on-device LLM chat application for Android, powered by **Google LiteRT
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/carrycooldude/Gemma3n-QNN-LiteRT.git
-cd Gemma3n-QNN-LiteRT
+git clone https://github.com/carrycooldude/ModelGarden-QNN-LiteRT.git
+cd ModelGarden-QNN-LiteRT
 ```
 
 ### 2. Build & Install
