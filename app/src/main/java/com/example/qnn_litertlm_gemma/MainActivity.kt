@@ -218,8 +218,10 @@ class MainActivity : AppCompatActivity() {
             
             if (result.isSuccess) {
                 binding.cardInput.visibility = View.VISIBLE
-                addSystemMessage("${modelConfig.name} initialized. Ready to chat!")
-                binding.textBenchmark.text = "Init Time: ${loadTime}ms | Model: ${modelConfig.name}"
+                val backend = liteRTLMManager.getActiveBackendName()
+                val memory = liteRTLMManager.getMemoryUsageMb()
+                addSystemMessage("${modelConfig.name} initialized on $backend. Ready to chat!")
+                binding.textBenchmark.text = "Init: ${loadTime}ms | Backend: $backend | Mem: ${memory}MB"
             } else {
                 val error = result.exceptionOrNull()?.message ?: "Unknown error"
                 binding.textLoadingStatus.visibility = View.VISIBLE
@@ -241,11 +243,16 @@ class MainActivity : AppCompatActivity() {
         messages.add(assistantMessage)
         updateMessages()
         
+        var firstTokenReceived = false
+        var startTime = System.currentTimeMillis()
+        var ttft: Long = 0
+        var tokenCount = 0
+
         lifecycleScope.launch {
             var fullResponse = ""
             val requestStartTime = System.nanoTime()
             var firstTokenTime = 0L
-            var tokenCount = 0 // Approximate 
+            // var tokenCount = 0 // Approximate - moved above
             
             try {
                 liteRTLMManager.sendMessage(text)
@@ -258,22 +265,33 @@ class MainActivity : AppCompatActivity() {
                         updateMessages()
                     }
                     .collect { messageChunk ->
-                        if (firstTokenTime == 0L) {
-                            firstTokenTime = System.nanoTime()
+                        if (!firstTokenReceived) { // Changed condition
+                            ttft = System.currentTimeMillis() - startTime
+                            firstTokenReceived = true
+                            // Reset timer for throughput
+                            startTime = System.currentTimeMillis()
+                            firstTokenTime = System.nanoTime() // Kept for original benchmark calculation
                         }
                         
                         val chunkText = messageChunk.toString()
                         fullResponse += chunkText
                         // Estimate token count roughly (e.g. 4 chars per token)
                         // Ideally we'd use a tokenizer, but for benchmark approximation:
-                        tokenCount += chunkText.length / 4 + 1
+                        tokenCount = fullResponse.length / 4 + 1 // Updated tokenCount logic
                         
                         messages[assistantMessageIndex] = assistantMessage.copy(
                             content = fullResponse,
                             isStreaming = true
                         )
                         chatAdapter.notifyItemChanged(assistantMessageIndex)
-                        binding.recyclerViewMessages.smoothScrollToPosition(assistantMessageIndex)
+                        binding.recyclerViewMessages.smoothScrollToPosition(assistantMessageIndex) // Used binding and smoothScroll
+                        
+                        val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+                        val speed = if (elapsed > 0) String.format("%.2f", tokenCount / elapsed) else "0.00"
+                        val backend = liteRTLMManager.getActiveBackendName() // Reverted to original manager
+                        val memory = liteRTLMManager.getMemoryUsageMb() // Reverted to original manager
+                        
+                        binding.textBenchmark.text = "TTFT: ${ttft}ms | Speed: $speed t/s | Backend: $backend | Mem: ${memory}MB" // Used binding
                     }
                 
                 // Final update when done
@@ -283,17 +301,20 @@ class MainActivity : AppCompatActivity() {
                 )
                 updateMessages()
                 
-                // Final Stats
+                // Final Stats (original calculation, adjusted to use new tokenCount and ttft)
                 val endTime = System.nanoTime()
-                val ttftMs = (firstTokenTime - requestStartTime) / 1_000_000
+                val ttftMs = (firstTokenTime - requestStartTime) / 1_000_000 // Kept original TTFT calculation
                 val generationTimeMs = (endTime - firstTokenTime) / 1_000_000
                 // simple TPS calculation
                 val tokens = fullResponse.length / 4.0 // Approx
                 val tps = if (generationTimeMs > 0) (tokens / (generationTimeMs / 1000.0)) else 0.0
                 
+                val backend = liteRTLMManager.getActiveBackendName()
+                val memory = liteRTLMManager.getMemoryUsageMb()
+                
                 binding.textBenchmark.text = String.format(
-                    "TTFT: %dms | Speed: %.2f t/s (approx) | Len: %d", 
-                    ttftMs, tps, fullResponse.length
+                    "TTFT: %dms | Speed: %.2f t/s | Backend: %s | Mem: %dMB", 
+                    ttftMs, tps, backend, memory
                 )
                 
             } catch (e: Exception) {

@@ -93,7 +93,7 @@ Despite its 0.6B size, Qwen 3 supports the "Thinking" mode, allowing it to gener
 
 ## 📊 The Showdown: Benchmarking Results
 
-We tested both models on a **Samsung Galaxy S24 Ultra**:
+We tested both models on a **Samsung Galaxy S25 Ultra**:
 
 | Metric | Qwen 3 0.6B | Gemma 3n |
 | :--- | :--- | :--- |
@@ -104,6 +104,16 @@ We tested both models on a **Samsung Galaxy S24 Ultra**:
 ### Analysis
 *   **Gemma 3n** wins on response depth and detail, making it the better choice for knowledge-intensive reasoning.
 *   **Qwen 3** wins on absolute speed, making it the perfect conversational companion where speed is parity with human thought.
+
+## 🔍 On-Device Profiling Insights
+
+To understand exactly how these models interact with the hardware, we implemented a custom **On-Device Profiler**. This tool provides real-time telemetry directly in the UI:
+
+*   **Active Backend**: Confirms whether the model is running on the **NPU (QNN)**, **GPU**, or **CPU**.
+*   **Memory Footprint**: Tracks live heap usage to monitor the model's impact on device resources.
+*   **TTFT & TPS**: Captures the exact latency and throughput for every generation.
+
+This deep visibility allows developers to optimize model selection based on the specific hardware capabilities of the device in real-time.
 
 ---
 

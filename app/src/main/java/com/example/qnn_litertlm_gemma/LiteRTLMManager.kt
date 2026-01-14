@@ -13,6 +13,17 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 
 /**
+ * Data class for model performance metrics
+ */
+data class PerformanceMetrics(
+    val initializationTimeMs: Long = 0,
+    val timeToFirstTokenMs: Long = 0,
+    val tokensPerSecond: Double = 0.0,
+    val activeBackend: String = "Unknown",
+    val memoryUsageMb: Long = 0
+)
+
+/**
  * Singleton manager for LiteRT-LM Engine
  * Handles model initialization and conversation management
  */
@@ -21,6 +32,7 @@ class LiteRTLMManager private constructor(private val context: Context) {
     private var engine: Engine? = null
     private var conversation: com.google.ai.edge.litertlm.Conversation? = null
     private var isInitialized = false
+    private var currentBackend: Backend = Backend.CPU
     
     companion object {
         private const val TAG = "LiteRTLMManager"
@@ -37,9 +49,9 @@ class LiteRTLMManager private constructor(private val context: Context) {
     
     /**
      * Initialize the LiteRT-LM engine with the model
-     * This should be called on a background thread as it can take several seconds
      */
     suspend fun initialize(modelPath: String, systemPrompt: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
+        val startTime = System.currentTimeMillis()
         try {
             if (isInitialized) {
                 Log.d(TAG, "Re-initializing engine...")
@@ -48,37 +60,40 @@ class LiteRTLMManager private constructor(private val context: Context) {
             
             Log.d(TAG, "Initializing LiteRT-LM engine with path: $modelPath")
             
-            // Try detected backend first (GPU)
-            val preferredBackend = detectBestBackend()
-            Log.d(TAG, "Using preferred backend: $preferredBackend")
+            // Try priority: NPU (QNN) -> GPU (OpenCL) -> CPU
+            val backendsToTry = listOf(Backend.NPU, Backend.GPU, Backend.CPU)
+            var success = false
+            var lastError: Exception? = null
             
-            try {
-                initializeEngineWithBackend(modelPath, preferredBackend)
-            } catch (e: Exception) {
-                if (preferredBackend == Backend.GPU) {
-                    Log.w(TAG, "GPU initialization failed, falling back to CPU", e)
-                    // If GPU fails, cleanup (just in case) and retry with CPU
+            for (backend in backendsToTry) {
+                try {
+                    Log.d(TAG, "Attempting initialization with backend: $backend")
+                    initializeEngineWithBackend(modelPath, backend)
+                    currentBackend = backend
+                    success = true
+                    break
+                } catch (e: Exception) {
+                    Log.w(TAG, "$backend initialization failed, trying next...", e)
+                    lastError = e
                     cleanup()
-                    initializeEngineWithBackend(modelPath, Backend.CPU)
-                } else {
-                    throw e
                 }
             }
             
-            // Create a conversation with default configuration
+            if (!success) {
+                throw lastError ?: Exception("Failed to initialize with any backend")
+            }
+            
+            // Create a conversation
             val conversationConfig = ConversationConfig(
-                systemMessage = Message.of(systemPrompt ?: "You are a helpful AI assistant powered by LiteRT-LM running on device."),
-                samplerConfig = SamplerConfig(
-                    topK = 40,
-                    topP = 0.95,
-                    temperature = 0.8
-                )
+                systemMessage = Message.of(systemPrompt ?: "You are a helpful AI assistant powered by LiteRT-LM."),
+                samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = 0.8)
             )
             
             conversation = engine?.createConversation(conversationConfig)
             isInitialized = true
             
-            Log.d(TAG, "LiteRT-LM initialized successfully")
+            val duration = System.currentTimeMillis() - startTime
+            Log.d(TAG, "LiteRT-LM initialized successfully on $currentBackend in ${duration}ms")
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize LiteRT-LM", e)
@@ -87,23 +102,18 @@ class LiteRTLMManager private constructor(private val context: Context) {
     }
     
     private fun initializeEngineWithBackend(modelPath: String, backend: Backend) {
-        // Use simpler config to avoid potential issues with multimodal backends on text-only models
         val engineConfig = EngineConfig(
             modelPath = modelPath,
             backend = backend,
             cacheDir = context.cacheDir.path
         )
-        
         engine = Engine(engineConfig)
         engine?.initialize()
     }
     
-    /**
-     * Send a message and receive streaming response
-     */
     suspend fun sendMessage(messageText: String): Flow<Message> {
         if (!isInitialized || conversation == null) {
-            throw IllegalStateException("LiteRT-LM not initialized. Call initialize() first.")
+            throw IllegalStateException("LiteRT-LM not initialized.")
         }
         
         return withContext(Dispatchers.IO) {
@@ -111,23 +121,14 @@ class LiteRTLMManager private constructor(private val context: Context) {
             conversation!!.sendMessageAsync(userMessage)
         }
     }
-    
-    /**
-     * Detect the best available backend
-     */
-    private fun detectBestBackend(): Backend {
-        return try {
-            Log.d(TAG, "Attempting to use GPU backend...")
-            Backend.GPU
-        } catch (e: Exception) {
-            Log.w(TAG, "GPU backend not available, falling back to CPU", e)
-            Backend.CPU
-        }
+
+    fun getActiveBackendName(): String = currentBackend.name
+
+    fun getMemoryUsageMb(): Long {
+        val runtime = Runtime.getRuntime()
+        return (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
     }
     
-    /**
-     * Clean up resources
-     */
     fun cleanup() {
         try {
             conversation?.close()
@@ -135,7 +136,6 @@ class LiteRTLMManager private constructor(private val context: Context) {
             conversation = null
             engine = null
             isInitialized = false
-            Log.d(TAG, "LiteRT-LM resources cleaned up")
         } catch (e: Exception) {
             Log.e(TAG, "Error cleaning up resources", e)
         }
