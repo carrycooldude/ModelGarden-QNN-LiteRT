@@ -37,6 +37,13 @@ class ModelDownloader(private val context: Context) {
                 filename = "qwen3-0.6b.litertlm",
                 url = "https://huggingface.co/litert-community/Qwen3-0.6B/resolve/main/qwen3-0.6b-int4.litertlm",
                 systemPrompt = "You are Qwen, a helpful AI assistant running on device."
+            ),
+            ModelConfig(
+                id = "gemma3-1b",
+                name = "Gemma 3 1B (Int4)",
+                filename = "gemma3-1b-it-int4.litertlm",
+                url = "https://huggingface.co/litert-community/Gemma3-1B-IT/blob/main/gemma3-1b-it-int4.litertlm",
+                systemPrompt = "You are Gemma, a helpful AI assistant running on device."
             )
         )
     }

@@ -10,6 +10,12 @@ A premium on-device LLM chat application for Android, powered by **Google LiteRT
 *   **Ultra-Lightweight**: Only 0.6 Billion parameters.
 *   **High Speed**: Extremely fast on-device inference suitable for instant chat.
 
+**Gemma 3 1B** is an efficient, compact model from Google.
+*   **1B**: 1 Billion parameters.
+*   **Versatile**: Pretty efficient model useful for a number of use-cases
+
+
+
 ## 🚀 Features
 
 *   **Multi-Model Support**: Switch between **Gemma 3n (Int4)** and **Qwen 3 0.6B (Int4)** on the fly using the toolbar spinner.
