@@ -15,6 +15,9 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -32,7 +35,6 @@ android {
     }
     kotlinOptions {
         jvmTarget = "11"
-        freeCompilerArgs += "-Xskip-metadata-version-check"
     }
     buildFeatures {
         viewBinding = true
@@ -46,9 +48,20 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.activity.ktx)
     implementation(libs.androidx.recyclerview)
+    implementation(libs.androidx.security.crypto)
     
     // LiteRT-LM
     implementation(libs.litertlm.android)
+    
+    // Standard LiteRT for Embeddings
+    implementation("com.google.ai.edge.litert:litert:2.1.0")
+
+
+    implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.16.1") {
+        exclude(group = "org.tensorflow", module = "tensorflow-lite")
+        exclude(group = "org.tensorflow", module = "tensorflow-lite-api")
+    }
+    implementation("com.qualcomm.qti:qnn-litert-delegate:2.42.0")
     
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
