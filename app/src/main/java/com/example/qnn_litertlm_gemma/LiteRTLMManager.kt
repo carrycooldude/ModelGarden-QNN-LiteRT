@@ -87,7 +87,15 @@ class LiteRTLMManager private constructor(private val context: Context) {
             Log.d(TAG, "Initializing modern LiteRT CompiledModel for: $modelPath")
             
             // Use Factory method if constructor is private
-            environment = try { Environment.create() } catch (e: Exception) { null }
+            environment = try { Environment.create() } catch (e: Exception) { 
+                Log.w(TAG, "Environment.create() failed", e)
+                null 
+            }
+            
+            if (environment == null) {
+                // If environment is mandatory and creation failed, we can't proceed with NPU/Standard init
+                throw IllegalStateException("Failed to create LiteRT Environment")
+            }
             
             // Try initializing with NPU (Accelerator.NPU)
             try {
@@ -97,6 +105,7 @@ class LiteRTLMManager private constructor(private val context: Context) {
                     modelOptions::class.java.getMethod("setAccelerator", Accelerator::class.java).invoke(modelOptions, Accelerator.NPU)
                 } catch (e: Exception) {
                     // Try reflection-less fallback if common
+                    Log.w(TAG, "Failed to set Accelerator.NPU via reflection", e)
                 }
                 
                 // Assuming CompiledModel.create takes environment
@@ -109,13 +118,21 @@ class LiteRTLMManager private constructor(private val context: Context) {
                 currentBackend = Backend.NPU
             } catch (e: Exception) {
                 Log.w(TAG, "NPU Initialization failed, falling back to CPU", e)
-                val modelOptions = CompiledModel.Options()
-                compiledModel = CompiledModel.create(modelPath, modelOptions, environment!!)
-                currentBackend = Backend.CPU
+                try {
+                    val modelOptions = CompiledModel.Options()
+                    compiledModel = CompiledModel.create(modelPath, modelOptions, environment!!)
+                    currentBackend = Backend.CPU
+                    Log.d(TAG, "CompiledModel initialized with CPU fallback")
+                } catch (fallbackEx: Exception) {
+                     Log.e(TAG, "CPU fallback also failed", fallbackEx)
+                     throw fallbackEx
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Critical failure during Standard LiteRT initialization", e)
             currentBackend = Backend.CPU
+            // Ensure compiledModel is null so computeEmbedding knows it failed
+            compiledModel = null
         }
     }
     
