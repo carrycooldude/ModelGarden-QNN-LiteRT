@@ -19,7 +19,7 @@ Successfully resolved all compilation and runtime errors to achieve a working on
 
 ### 1. Model Compatibility Error (CRITICAL - Current Blocker)
 
-![Model Error Screenshot](file:///C:/Users/rawat/.gemini/antigravity/brain/99fbe806-8226-4457-80a0-0264d78ac38c/uploaded_image_1769060687059.jpg)
+![Model Error Screenshot](https://github.com/user-attachments/assets/b8fbb6ff-89d9-4a18-b054-28c26f2034dc)
 
 #### Error Details
 ```
