@@ -60,7 +60,6 @@ class ChatAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(ChatMessag
         
         fun bind(message: ChatMessage) {
             binding.textMessage.text = message.content
-            binding.textTime.text = timeFormat.format(message.timestamp)
         }
     }
     
@@ -70,7 +69,6 @@ class ChatAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(ChatMessag
         
         fun bind(message: ChatMessage) {
             binding.textMessage.text = message.content
-            binding.textTime.text = timeFormat.format(message.timestamp)
             
             // Show typing indicator for streaming messages
             binding.typingIndicator.visibility = if (message.isStreaming) View.VISIBLE else View.GONE

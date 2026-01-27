@@ -9,12 +9,10 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.LogSeverity
-import com.google.ai.edge.litert.CompiledModel
-import com.google.ai.edge.litert.Environment
-import com.google.ai.edge.litert.Accelerator
-import com.google.ai.edge.litert.TensorBuffer
+import com.google.ai.edge.litertlm.Content
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
@@ -42,9 +40,7 @@ class LiteRTLMManager private constructor(private val context: Context) {
     private var isInitialized = false
     private var currentBackend: Backend = Backend.CPU
     
-    // Standard LiteRT components for embedding models
-    private var environment: Environment? = null
-    private var compiledModel: CompiledModel? = null
+    // Standard LiteRT components disabled
     
     companion object {
         private const val TAG = "LiteRTLMManager"
@@ -62,104 +58,105 @@ class LiteRTLMManager private constructor(private val context: Context) {
     /**
      * Initialize the LiteRT-LM Engine with the specified model
      */
-    suspend fun initialize(modelPath: String, systemPrompt: String? = null, isEmbedding: Boolean = false): Result<Boolean> = withContext(Dispatchers.IO) {
+    suspend fun initialize(modelPath: String, systemPrompt: String? = null, isEmbedding: Boolean = false, preferredBackend: String? = null): Result<Boolean> = withContext(Dispatchers.IO) {
+        Log.e(TAG, "!!! LiteRTLMManager.initialize STARTED for: $modelPath !!!")
         if (isInitialized) {
             cleanup()
         }
         
         try {
+            Log.e(TAG, "Checking backend availability...")
             if (isEmbedding) {
                 initializeStandardLiteRT(modelPath)
             } else {
-                // Try NPU first for generative models
-                initializeEngineWithBackend(modelPath, Backend.NPU)
+                val initialBackend = if (preferredBackend != null) {
+                    try {
+                        Backend.valueOf(preferredBackend.uppercase())
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Invalid preferred backend: $preferredBackend, defaulting to GPU")
+                        Backend.GPU
+                    }
+                } else {
+                    Log.e(TAG, "No preference, defaulting to GPU for generative model")
+                    Backend.GPU
+                }
+                
+                Log.e(TAG, "Initializing with initial backend: $initialBackend")
+                initializeEngineWithRotation(modelPath, initialBackend)
             }
             isInitialized = true
+            Log.e(TAG, "!!! LiteRTLMManager.initialize COMPLETED SUCCESSFULLY !!!")
             Result.success(true)
-        } catch (e: Exception) {
-            Log.e(TAG, "Initialization failed: ${e.message}", e)
-            Result.failure(e)
+        } catch (e: Throwable) {
+            Log.e(TAG, "!!! INITIALIZATION CRITICAL FAILURE !!!: ${e.message}", e)
+            Result.failure(Exception(e))
         }
     }
 
     private fun initializeStandardLiteRT(modelPath: String) {
-        try {
-            Log.d(TAG, "Initializing modern LiteRT CompiledModel for: $modelPath")
-            
-            // Use Factory method if constructor is private
-            environment = try { Environment.create() } catch (e: Exception) { 
-                Log.w(TAG, "Environment.create() failed", e)
-                null 
-            }
-            
-            if (environment == null) {
-                // If environment is mandatory and creation failed, we can't proceed with NPU/Standard init
-                throw IllegalStateException("Failed to create LiteRT Environment")
-            }
-            
-            // Try initializing with NPU (Accelerator.NPU)
-            try {
-                val modelOptions = CompiledModel.Options()
-                // Try setting accelerator directly or via field if setter missing
-                try {
-                    modelOptions::class.java.getMethod("setAccelerator", Accelerator::class.java).invoke(modelOptions, Accelerator.NPU)
-                } catch (e: Exception) {
-                    // Try reflection-less fallback if common
-                    Log.w(TAG, "Failed to set Accelerator.NPU via reflection", e)
-                }
-                
-                // Assuming CompiledModel.create takes environment
-                compiledModel = CompiledModel.create(modelPath, modelOptions, environment!!)
-                Log.d(TAG, "CompiledModel initialized with NPU (Accelerator.NPU)")
-                
-                // Inspect signatures
-                LiteRTInspector.inspect(compiledModel!!)
-                
-                currentBackend = Backend.NPU
-            } catch (e: Exception) {
-                Log.w(TAG, "NPU Initialization failed, falling back to CPU", e)
-                try {
-                    val modelOptions = CompiledModel.Options()
-                    compiledModel = CompiledModel.create(modelPath, modelOptions, environment!!)
-                    currentBackend = Backend.CPU
-                    Log.d(TAG, "CompiledModel initialized with CPU fallback")
-                } catch (fallbackEx: Exception) {
-                     Log.e(TAG, "CPU fallback also failed", fallbackEx)
-                     throw fallbackEx
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Critical failure during Standard LiteRT initialization", e)
-            currentBackend = Backend.CPU
-            // Ensure compiledModel is null so computeEmbedding knows it failed
-            compiledModel = null
-        }
+        // Standard LiteRT disabled in 0.8.0 downgrade due to API incompatibility
+        Log.e(TAG, "Standard LiteRT initialization disabled in 0.8.0")
+        currentBackend = Backend.CPU
     }
     
-    private fun initializeEngineWithBackend(modelPath: String, backend: Backend) {
-        // EngineConfig parameters might have changed. Removing maxContextLength if it's not supported.
-        // Assuming modelPath and backend are valid.
+    // Updated to support rotation starting from any backend
+    private fun initializeEngineWithRotation(modelPath: String, backend: Backend) {
+        try {
+            initializeEngineLimit(modelPath, backend)
+        } catch (e: Throwable) {
+            Log.w(TAG, "Backend $backend failed: ${e.message}. Attempting fallback...", e)
+            
+            // Define fallback chain based on what failed
+            val nextBackend = when (backend) {
+                Backend.NPU -> Backend.GPU
+                Backend.GPU -> Backend.CPU
+                Backend.CPU -> null // End of line
+            }
+            
+            if (nextBackend != null) {
+                Log.i(TAG, "Falling back to $nextBackend")
+                initializeEngineWithRotation(modelPath, nextBackend)
+            } else {
+                Log.e(TAG, "All backends failed. Last error: ${e.message}", e)
+                throw e
+            }
+        }
+    }
+
+    private fun initializeEngineLimit(modelPath: String, backend: Backend) {
+        val file = File(modelPath)
+        Log.e(TAG, "Checking model file: ${file.absolutePath}")
+        if (!file.exists()) {
+            throw java.io.FileNotFoundException("Model file not found at $modelPath")
+        }
+        if (!file.canRead()) {
+            throw java.io.IOException("Model file exists but cannot be read (permissions?)")
+        }
+        Log.e(TAG, "Model file valid. Size: ${file.length()} bytes. Backend: $backend")
+
         val engineConfig = EngineConfig(
             modelPath = modelPath,
             backend = backend
         )
         
+        Log.e(TAG, "Instantiating Engine with backend: $backend")
+        val candidateEngine = Engine(engineConfig) // Constructor might throw
+        Log.e(TAG, "Initializing Engine explicitly (0.8.0 requirement)...")
+        candidateEngine.initialize()
+        
+        Log.e(TAG, "Engine instance created, verifying conversation support...")
         try {
-            // If Engine.create is static
-            engine = Engine(engineConfig)
-            currentBackend = backend
-            Log.i(TAG, "Engine initialized with backend: $backend")
-        } catch (e: Exception) {
-            if (backend == Backend.NPU) {
-                Log.w(TAG, "NPU initialization failed, falling back to GPU")
-                initializeEngineWithBackend(modelPath, Backend.GPU)
-            } else if (backend == Backend.GPU) {
-                Log.w(TAG, "GPU initialization failed, falling back to CPU")
-                initializeEngineWithBackend(modelPath, Backend.CPU)
-            } else {
-                throw e
-            }
+            val testConv = candidateEngine.createConversation(ConversationConfig())
+            testConv.close()
+            Log.e(TAG, "!!! Engine verified successfully with backend: $backend !!!")
+        } catch (cvError: Throwable) {
+            Log.e(TAG, "Conversation verification failed for $backend: ${cvError.message}")
+            candidateEngine.close()
+            throw cvError 
         }
+
+        engine = candidateEngine
+        currentBackend = backend
     }
 
     /**
@@ -178,48 +175,27 @@ class LiteRTLMManager private constructor(private val context: Context) {
             )
         )
         conversation = engine?.createConversation(conversationConfig)
-        
-        // Inspect conversation
-        LiteRTInspector.inspect(compiledModel!!, conversation)
     }
 
-    /**
-     * Send a message to the model and return a stream of responses
-     */
     fun sendMessage(text: String): Flow<String> {
-        // Temporarily bypass failing code for API inspection
-        return kotlinx.coroutines.flow.flowOf("API Inspection in progress...")
+        if (!isInitialized || engine == null) {
+            throw IllegalStateException("Engine not initialized.")
+        }
+        
+        if (conversation == null) {
+            startConversation()
+        }
+        // Efficient extraction from Message contents
+        // 0.8.0 API: Message.of(text)
+        val message = Message.of(text)
+        return conversation!!.sendMessageAsync(message).map { msg ->
+             msg.toString()
+        }
     }
 
-    /**
-     * Compute embeddings for the given text using modern CompiledModel
-     */
     suspend fun computeEmbedding(text: String): FloatArray = withContext(Dispatchers.IO) {
-        if (!isInitialized || compiledModel == null) {
-            throw IllegalStateException("CompiledModel not initialized.")
-        }
-        
-        // Dummy tokenization placeholder
-        val tokens = text.split(" ").map { it.hashCode() % 10000 }.toIntArray()
-        val paddedTokens = IntArray(512) { i -> if (i < tokens.size) tokens[i] else 0 }
-        
-        try {
-            val inputBuffers = compiledModel!!.createInputBuffers()
-            val outputBuffers = compiledModel!!.createOutputBuffers()
-            
-            // In LiteRT 2.1.0, writeInt and readFloat take array and return result
-            inputBuffers[0].writeInt(paddedTokens)
-            
-            val startTime = System.currentTimeMillis()
-            compiledModel!!.run(inputBuffers, outputBuffers)
-            val duration = System.currentTimeMillis() - startTime
-            Log.d(TAG, "Embedding inference took ${duration}ms")
-            
-            outputBuffers[0].readFloat()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error during CompiledModel inference: ${e.message}")
-            FloatArray(768)
-        }
+         // Embeddings disabled
+         FloatArray(768)
     }
 
     fun getActiveBackendName(): String = currentBackend.name
@@ -233,13 +209,13 @@ class LiteRTLMManager private constructor(private val context: Context) {
         try {
             conversation?.close()
             engine?.close()
-            compiledModel?.close()
-            environment?.close()
+            // compiledModel?.close()
+            // environment?.close()
             
             conversation = null
             engine = null
-            compiledModel = null
-            environment = null
+            // compiledModel = null
+            // environment = null
             isInitialized = false
         } catch (e: Exception) {
             Log.e(TAG, "Error during cleanup", e)

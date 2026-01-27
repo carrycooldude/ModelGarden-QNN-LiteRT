@@ -18,6 +18,8 @@
         <uses-native-library android:name="libvndksupport.so" android:required="false"/>
         <uses-native-library android:name="libOpenCL.so" android:required="false"/>
         
+        <profileable android:shell="true" tools:targetApi="29" />
+        
         <activity
             android:name=".MainActivity"
             android:exported="true"

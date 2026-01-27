@@ -1,6 +1,7 @@
 package com.example.qnn_litertlm_gemma
 
 import android.os.Bundle
+import android.util.Log
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
@@ -29,6 +30,7 @@ class MainActivity : AppCompatActivity() {
     private var currentModel: ModelConfig? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        Log.e("MainActivity", "!!! MainActivity.onCreate STARTED !!!")
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -36,23 +38,38 @@ class MainActivity : AppCompatActivity() {
         liteRTLMManager = LiteRTLMManager.getInstance(this)
         modelDownloader = ModelDownloader(this)
         
-        // Setup Menu for Token
-        binding.toolbar.inflateMenu(R.menu.menu_main)
-        binding.toolbar.setOnMenuItemClickListener {
-            when (it.itemId) {
-                R.id.action_set_token -> {
-                    showTokenDialog()
-                    true
-                }
-                else -> false
-            }
+        // Settings / Token Dialog
+        binding.iconSettings.setOnClickListener {
+            // Simple logic: click -> set token, long click -> nothing for now or model select?
+            // Actually let's make it show model selection if token exists, or token dialog if not?
+            // For now, simpler: Show simple dialog with options
+            showSettingsDialog()
         }
 
         setupRecyclerView()
         setupInput()
-        setupModelSpinner()
+        
+        // Auto-initialize default model if ready
+        val defaultModel = ModelDownloader.AVAILABLE_MODELS.first()
+        currentModel = defaultModel
+        checkAndInitialize(defaultModel)
     }
-    
+
+    private fun showSettingsDialog() {
+        val options = arrayOf("Set HF Token", "Select Model (Coming Soon)")
+        AlertDialog.Builder(this)
+            .setTitle("Settings")
+            .setItems(options) { _, which ->
+                 when (which) {
+                     0 -> showTokenDialog()
+                     1 -> Toast.makeText(this, "Only Gemma 3n supported currently", Toast.LENGTH_SHORT).show()
+                 }
+            }
+            .show()
+    }
+
+    // setupModelSpinner removed (Model selection fixed to Gemma 3n for now per user request)
+
     private fun showTokenDialog() {
         val input = EditText(this)
         input.hint = "hf_..."
@@ -78,30 +95,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun setupModelSpinner() {
-        val models = ModelDownloader.AVAILABLE_MODELS
-        val adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            models.map { it.name }
-        )
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        val spinner = binding.toolbar.findViewById<Spinner>(R.id.spinnerModel)
-        spinner.adapter = adapter
-        
-        spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val selectedModel = models[position]
-                if (currentModel != selectedModel) {
-                    currentModel = selectedModel
-                    checkAndInitialize(selectedModel)
-                }
-            }
-
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-        }
-    }
-    
     private fun setupRecyclerView() {
         chatAdapter = ChatAdapter()
         binding.recyclerViewMessages.apply {
@@ -110,7 +103,7 @@ class MainActivity : AppCompatActivity() {
                 stackFromEnd = true
             }
             
-            // Scroll to bottom when keyboard opens (layout shrinks)
+            // Scroll to bottom when keyboard opens
             addOnLayoutChangeListener { _, _, _, _, bottom, _, _, _, oldBottom ->
                 if (bottom < oldBottom) {
                     binding.recyclerViewMessages.postDelayed({
@@ -124,10 +117,12 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun setupInput() {
-        // Enable/disable send button based on input
+        // Enable/disable send button
         binding.editTextMessage.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                // Change button color/alpha?
+                binding.buttonSend.alpha = if (!s.isNullOrBlank()) 1.0f else 0.5f
                 binding.buttonSend.isEnabled = !s.isNullOrBlank()
             }
             override fun afterTextChanged(s: Editable?) {}
@@ -141,7 +136,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
-        // Initially disable send button
+        binding.buttonSend.alpha = 0.5f
         binding.buttonSend.isEnabled = false
     }
     
@@ -149,9 +144,12 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             // Reset UI state for new model
             binding.cardInput.visibility = View.GONE
-            binding.progressBarLoading.visibility = View.VISIBLE
-            binding.textLoadingStatus.visibility = View.VISIBLE
+            binding.layoutLoading.visibility = View.VISIBLE
+            binding.layoutLoading.visibility = View.VISIBLE
             binding.textLoadingStatus.text = "Checking ${modelConfig.name}..."
+            
+            // Update Header
+            binding.textModelName.text = modelConfig.name
             
             if (modelDownloader.isModelDownloaded(modelConfig)) {
                 initializeEngine(modelConfig)
@@ -178,7 +176,7 @@ class MainActivity : AppCompatActivity() {
                         initializeEngine(modelConfig)
                     }
                     is DownloadProgress.Error -> {
-                        binding.progressBarLoading.visibility = View.GONE
+                        binding.layoutLoading.visibility = View.GONE
                         binding.textLoadingStatus.text = "Error: ${progress.message}"
                         
                         // Suggest token if 401/403 or generic error
@@ -200,31 +198,33 @@ class MainActivity : AppCompatActivity() {
     
     private fun initializeEngine(modelConfig: ModelConfig) {
         lifecycleScope.launch {
-            binding.progressBarLoading.visibility = View.VISIBLE
-            binding.textLoadingStatus.visibility = View.VISIBLE
+            binding.layoutLoading.visibility = View.VISIBLE
             binding.textLoadingStatus.text = "Initializing ${modelConfig.name}..."
             
             val startTime = System.currentTimeMillis()
             
             val result = liteRTLMManager.initialize(
                 modelDownloader.getModelPath(modelConfig),
-                modelConfig.systemPrompt
+                modelConfig.systemPrompt,
+                false, // isEmbedding
+                modelConfig.preferredBackend
             )
             
             val loadTime = System.currentTimeMillis() - startTime
             
-            binding.progressBarLoading.visibility = View.GONE
-            binding.textLoadingStatus.visibility = View.GONE
+            binding.layoutLoading.visibility = View.GONE
             
             if (result.isSuccess) {
                 binding.cardInput.visibility = View.VISIBLE
                 val backend = liteRTLMManager.getActiveBackendName()
                 val memory = liteRTLMManager.getMemoryUsageMb()
-                addSystemMessage("${modelConfig.name} initialized on $backend. Ready to chat!")
-                binding.textBenchmark.text = "Init: ${loadTime}ms | Backend: $backend | Mem: ${memory}MB"
+                addSystemMessage("${modelConfig.name} initialized on $backend.")
+                
+                binding.textBackendStatus.text = "Gemma"
+                // binding.textBenchmarkStats.text = "Ready" // Already set in XML
             } else {
                 val error = result.exceptionOrNull()?.message ?: "Unknown error"
-                binding.textLoadingStatus.visibility = View.VISIBLE
+                binding.layoutLoading.visibility = View.VISIBLE
                 binding.textLoadingStatus.text = "Initialization failed: $error"
                 Toast.makeText(this@MainActivity, "Init failed: $error", Toast.LENGTH_LONG).show()
             }
@@ -291,7 +291,8 @@ class MainActivity : AppCompatActivity() {
                         val backend = liteRTLMManager.getActiveBackendName() // Reverted to original manager
                         val memory = liteRTLMManager.getMemoryUsageMb() // Reverted to original manager
                         
-                        binding.textBenchmark.text = "TTFT: ${ttft}ms | Speed: $speed t/s | Backend: $backend | Mem: ${memory}MB" // Used binding
+                        binding.textBenchmarkStats.text = "TTFT: ${ttft}ms | Speed: $speed t/s"
+                        // binding.textBackendStatus.text = "NPU Active" // Keep static or update only if changed
                     }
                 
                 // Final update when done
@@ -312,9 +313,9 @@ class MainActivity : AppCompatActivity() {
                 val backend = liteRTLMManager.getActiveBackendName()
                 val memory = liteRTLMManager.getMemoryUsageMb()
                 
-                binding.textBenchmark.text = String.format(
-                    "TTFT: %dms | Speed: %.2f t/s | Backend: %s | Mem: %dMB", 
-                    ttftMs, tps, backend, memory
+                binding.textBenchmarkStats.text = String.format(
+                    "TTFT: %dms | Speed: %.2f t/s", 
+                    ttftMs, tps
                 )
                 
             } catch (e: Exception) {

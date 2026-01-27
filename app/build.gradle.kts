@@ -54,7 +54,7 @@ dependencies {
     implementation(libs.litertlm.android)
     
     // Standard LiteRT for Embeddings
-    implementation("com.google.ai.edge.litert:litert:2.1.0")
+    implementation("com.google.ai.edge.litert:litert:1.4.1")
 
 
     implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.16.1") {
@@ -62,6 +62,7 @@ dependencies {
         exclude(group = "org.tensorflow", module = "tensorflow-lite-api")
     }
     implementation("com.qualcomm.qti:qnn-litert-delegate:2.42.0")
+    implementation(libs.litert.gpu)
     
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
