@@ -1,46 +1,32 @@
-# ModelGarden-QNN-LiteRT — Gemma 4 Models On-Device Chat
+# ModelGarden-QNN-LiteRT — Gemma 4 NPU Chatbot
 
-A premium **multimodal** on-device LLM chat application for Android, powered by **Google LiteRT-LM**. Features **Gemma 4 models** with support for **text, image, and audio** inputs, running entirely on-device with **NPU/GPU/CPU** acceleration.
+An on-device LLM chat application for Android, powered by **Google LiteRT-LM** and **Qualcomm NPU** acceleration. Runs **Gemma 4 2B** natively on the **Snapdragon 8 Elite** NPU for fast, private inference.
 
-## [Gemma 4 Models](https://ai.google.dev/gemma/docs/core)
-
-[Gemma 4](https://ai.google.dev/gemma/docs/core) is Google's latest family of open models, built from the same research as Gemini.
-
-*   **Multimodal**: Understands **text + images + audio** natively
-*   **Architecture**: Per-Layer Embeddings (PLE), Shared KV Cache, variable aspect ratio vision encoder
-*   **Context**: Up to 32K tokens
-*   **License**: Apache 2.0 (fully open)
-*   **Collection**: [HuggingFace Gemma 4 Collection](https://huggingface.co/collections/google/gemma-4)
+Based on the official [Google AI Edge LiteRT Samples](https://github.com/google-ai-edge/litert-samples/tree/main/compiled_model_api/qualcomm/llm_chatbot_npu).
 
 ## Features
 
-*   **Gemma 4 models** as the default on-device models
-*   **Multimodal Input**: Attach images from gallery and record audio directly in-app
-*   **NPU → GPU → CPU** backend fallback for optimal performance on Snapdragon 8 Elite
-*   **ADB Push Support**: Push the model from PC — no in-app download needed for large files
-*   **Multi-Model Support**: Switch between Gemma 4, Gemma 3n, Qwen 3, Gemma 3 1B
-*   **Real-time Benchmarks**: TTFT, tokens/sec, token count
-*   **Modern Premium UI**: Deep Blue & Soft Gray aesthetic with streaming responses
+*   **NPU-First Inference**: Runs Gemma 4 2B on the Qualcomm Hexagon NPU via LiteRT Compiled Model API
+*   **Backend Fallback**: NPU → GPU → CPU automatic fallback chain
+*   **Multi-Model Support**: Switch between Gemma 4 2B and FastVLM 0.5B (vision) via in-app selector
+*   **Real-time Benchmarks**: TTFT, tokens/sec displayed in the header
+*   **ADB Push Models**: No in-app download — push `.litertlm` files via ADB
+*   **Modern UI**: Material 3 design with streaming responses and chat bubbles
 
-## Benchmarks (Samsung S25 Ultra - Snapdragon 8 Elite)
+## Supported Models
 
-| Metric | Gemma 4 | Gemma 3n | Qwen 3 0.6B |
+| Model | Filename | Modality | Backend |
 | :--- | :--- | :--- | :--- |
-| **Model Size** | Variable | ~1.5 GB | ~0.5 GB |
-| **Modalities** | Text + Image + Audio | Text | Text |
-| **Context Length** | 32K | 8K | 4K |
-| **Backend** | NPU/GPU/CPU | GPU/CPU | GPU/CPU |
-
-> **Note**: Performance benchmarks from the [Gemma 4 family](https://ai.google.dev/gemma/docs/core) show excellent throughput on Android with GPU acceleration via XNNPack and ML Drift.
+| **Gemma 4 2B** | `gemma4_2b_181450_244_sm8750.litertlm` | Text | NPU |
+| **FastVLM 0.5B** | `FastVLM-0.5B.qualcomm.sm8750.litertlm` | Text + Image | NPU |
 
 ## Setup & Installation
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/carrycooldude/ModelGarden-QNN-LiteRT/blob/main/google_colab/LiteRT_Gemma4_NPU_AOT_Compilation.ipynb)
-
 ### Prerequisites
 *   Android Studio Ladybug (or newer)
-*   Samsung S25 Ultra (or any Android 10+ device with ARM64)
+*   Samsung S25 Ultra (Snapdragon 8 Elite / SM8750)
 *   ~3GB free storage for the model
+*   ADB configured
 
 ### 1. Clone the Repository
 ```bash
@@ -53,50 +39,73 @@ cd ModelGarden-QNN-LiteRT
 ./gradlew installDebug
 ```
 
-### 3. Push the Model via ADB (Recommended)
+### 3. Push Models via ADB
 
-Download the **LiteRT Community Gemma 4** model on your PC from HuggingFace:
+#### Gemma 4 2B (Text-only, NPU)
 ```bash
-# Download the LiteRT Community Gemma 4 model
-curl -L -o gemma-4.litertlm "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
-
-# Push to phone
-adb push gemma-4.litertlm /sdcard/Download/
+# Option A: If you have the compiled model locally
+adb push gemma4_2b_181450_244_sm8750.litertlm /sdcard/Android/data/com.example.qnn_litertlm_gemma/files/
 ```
 
-Or use the Hugging Face CLI:
+See the [NPU Compilation Guide](https://github.com/google-ai-edge/litert-samples/blob/main/compiled_model_api/qualcomm/llm_chatbot_npu/NPU_COMPILATION_GUIDE.md) for how to compile your own model for NPU.
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://github.com/google-ai-edge/litert-samples/blob/main/compiled_model_api/colab/LiteRT_AOT_Compilation_Tutorial.ipynb) — **AOT Compilation Tutorial** for compiling models to `.litertlm` format
+
+#### FastVLM 0.5B (Vision, NPU)
 ```bash
+# Download from HuggingFace
 pip install huggingface_hub
-# Download the LiteRT Community Gemma 4 model
-huggingface-cli download litert-community/gemma-4-E2B-it-litert-lm gemma-4-E2B-it.litertlm --local-dir .
-mv gemma-4-E2B-it.litertlm gemma-4.litertlm
-adb push gemma-4.litertlm /sdcard/Download/
+huggingface-cli download litert-community/FastVLM-0.5B FastVLM-0.5B.qualcomm.sm8750.litertlm --local-dir .
+
+# Push to device
+adb push FastVLM-0.5B.qualcomm.sm8750.litertlm /sdcard/Android/data/com.example.qnn_litertlm_gemma/files/
 ```
 
-The app will automatically detect the model in `/sdcard/Download/` on launch.
+### 4. Launch & Use
+1.  **Launch the App**: Select a model from the dropdown — it initializes on NPU automatically
+2.  **Chat**: Type messages and get streaming responses
+3.  **Switch Models**: Use the dropdown in the header to switch between Gemma 4 and FastVLM
+4.  **Benchmarks**: Watch real-time TTFT and tokens/sec in the header
 
-### 4. Usage
-1.  **Launch the App**: The app detects the Gemma 4 model and initializes (NPU → GPU → CPU)
-2.  **Chat**: Type messages for text-only conversations
-3.  **Image Input**: Tap the gallery button to attach an image, then ask about it
-4.  **Audio Input**: Tap the mic button to record audio, tap again to stop
-5.  **Switch Models**: Settings → Select Model to try other models
-6.  **Benchmarks**: Watch real-time TTFT and tokens/sec in the header
+## Architecture
 
-## Notes on Hardware Acceleration
+```
+app/src/main/java/com/example/qnn_litertlm_gemma/
+├── MainActivity.kt        # UI, chat, audio recording, image attachment
+├── LiteRTLMManager.kt     # Engine singleton, backend fallback, multimodal messaging
+├── ModelDownloader.kt      # Model registry & local file resolver
+├── ModelConfig.kt          # Data class for model configuration
+├── ChatAdapter.kt          # RecyclerView adapter for chat messages
+└── ChatMessage.kt          # Message data model
 
-*   The app tries **NPU** first (Qualcomm Hexagon on Snapdragon 8 Elite), then falls back to **GPU** (OpenCL/ML Drift), then **CPU** (XNNPack)
-*   NPU requires device-specific libraries — falls back gracefully if unavailable
-*   `cacheDir` is used for faster model reloading on subsequent launches
+app/src/main/jniLibs/arm64-v8a/
+├── libGemmaModelConstraintProvider.so
+├── libLiteRtDispatch_Qualcomm.so
+├── libQnnHtp.so
+├── libQnnHtpV79Skel.so
+├── libQnnHtpV79Stub.so
+└── libQnnSystem.so
+```
+
+## Dependencies
+
+*   **LiteRT-LM** `0.11.0-rc1` — Google's on-device LLM runtime
+*   **Qualcomm QNN** — NPU dispatch libraries for Snapdragon 8 Elite
+
+## Notes on NPU Acceleration
+
+*   The model `.litertlm` file must be compiled specifically for the target NPU (SM8750 for S25 Ultra)
+*   `LD_LIBRARY_PATH` and `ADSP_LIBRARY_PATH` are configured at runtime for QNN dispatch
+*   `cacheDir` is used for JIT compilation caching on subsequent launches
+*   Models compiled without `--enable_vision` / `--enable_audio` are text-only
 
 ## References
 
+*   [Google AI Edge LiteRT Samples (Reference)](https://github.com/google-ai-edge/litert-samples/tree/main/compiled_model_api/qualcomm/llm_chatbot_npu)
+*   [NPU Compilation Guide](https://github.com/google-ai-edge/litert-samples/blob/main/compiled_model_api/qualcomm/llm_chatbot_npu/NPU_COMPILATION_GUIDE.md)
 *   [Gemma 4 Overview](https://ai.google.dev/gemma/docs/core)
-*   [Gemma 4 Model Card](https://ai.google.dev/gemma/docs/core/model_card_4)
-*   [HuggingFace Gemma 4 Collection](https://huggingface.co/collections/google/gemma-4)
-*   [HuggingFace Gemma 4 Blog](https://huggingface.co/blog/gemma4)
 *   [LiteRT-LM Android Guide](https://ai.google.dev/edge/litert-lm/android)
-*   [LiteRT-LM Models](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm)
+*   [LiteRT Community Models on HuggingFace](https://huggingface.co/litert-community)
 
 ## Demo
 

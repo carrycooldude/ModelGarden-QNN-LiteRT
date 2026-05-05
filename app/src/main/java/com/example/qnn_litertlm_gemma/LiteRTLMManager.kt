@@ -9,8 +9,6 @@ import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.Message
-import com.google.ai.edge.litertlm.SamplerConfig
-import com.google.ai.edge.litertlm.LogSeverity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -36,49 +34,30 @@ data class PerformanceMetrics(
  * Backend fallback chain: NPU → GPU → CPU
  */
 class LiteRTLMManager private constructor(private val context: Context) {
-    
+
     private var engine: Engine? = null
     private var conversation: com.google.ai.edge.litertlm.Conversation? = null
     private var isInitialized = false
     private var currentBackendName: String = "CPU"
-    
+    private var nativeRuntimeConfigured = false
+
     companion object {
         private const val TAG = "LiteRTLMManager"
-        
+
         init {
-            try {
-                // Set library paths for dlopen
-                val testDir = "/data/local/tmp/gemma/litertl"
-                android.system.Os.setenv("LD_LIBRARY_PATH", testDir, true)
-                android.system.Os.setenv("ADSP_LIBRARY_PATH", testDir, true)
-                
-                // Order matters: dependencies first
-                System.loadLibrary("QnnSystem")
-                System.loadLibrary("QnnHtp")
-                System.loadLibrary("QnnHtpV79Stub")
-                System.loadLibrary("GemmaModelConstraintProvider")
-                System.loadLibrary("LiteRt")
-                System.loadLibrary("LiteRtDispatch_Qualcomm")
-                System.loadLibrary("LiteRtGpuAccelerator")
-                System.loadLibrary("LiteRtOpenClAccelerator")
-                Log.i(TAG, "Native libraries loaded successfully")
-            } catch (e: UnsatisfiedLinkError) {
-                Log.w(TAG, "Could not load native libraries explicitly: ${e.message}")
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to set environment variables: ${e.message}")
-            }
+            Log.i(TAG, "Using LiteRT-LM native loader")
         }
 
         @Volatile
         private var INSTANCE: LiteRTLMManager? = null
-        
+
         fun getInstance(context: Context): LiteRTLMManager {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: LiteRTLMManager(context.applicationContext).also { INSTANCE = it }
             }
         }
     }
-    
+
     /**
      * Initialize the LiteRT-LM Engine with the specified model.
      * Uses NPU → GPU → CPU fallback chain.
@@ -87,13 +66,15 @@ class LiteRTLMManager private constructor(private val context: Context) {
         modelPath: String,
         systemPrompt: String? = null,
         isEmbedding: Boolean = false,
-        preferredBackend: String? = null
+        preferredBackend: String? = null,
+        supportsImage: Boolean = true,
+        supportsAudio: Boolean = true
     ): Result<Boolean> = withContext(Dispatchers.IO) {
         Log.i(TAG, "Initializing for: $modelPath (preferred: $preferredBackend)")
         if (isInitialized) {
             cleanup()
         }
-        
+
         try {
             if (isEmbedding) {
                 Log.w(TAG, "Embedding mode not supported in this version")
@@ -101,8 +82,7 @@ class LiteRTLMManager private constructor(private val context: Context) {
             } else {
                 // Build ordered backend list based on preference
                 val backends = buildBackendList(preferredBackend)
-                val testModelPath = "/data/local/tmp/gemma/litertl/model.litertlm"
-                initializeEngineWithFallback(testModelPath, backends)
+                initializeEngineWithFallback(modelPath, backends, supportsImage, supportsAudio)
             }
             isInitialized = true
             Log.i(TAG, "Initialization SUCCEEDED on backend: $currentBackendName")
@@ -118,21 +98,22 @@ class LiteRTLMManager private constructor(private val context: Context) {
      * NPU → GPU → CPU by default; shifts based on preference.
      */
     private fun buildBackendList(preferred: String?): List<BackendFactory> {
+        val nativeLibraryDir = context.applicationInfo.nativeLibraryDir
         val allBackends = listOf(
-            BackendFactory("NPU", nativeLibraryDir = "/data/local/tmp/gemma/litertl") {
-                val libDir = "/data/local/tmp/gemma/litertl"
+            BackendFactory("NPU", nativeLibraryDir = nativeLibraryDir) {
+                val libDir = nativeLibraryDir
                 Log.i(TAG, "Using native library dir for NPU: $libDir")
                 Backend.NPU(nativeLibraryDir = libDir)
             },
             BackendFactory("GPU") { Backend.GPU() },
             BackendFactory("CPU") { Backend.CPU() }
         )
-        
+
         if (preferred == null) return allBackends
-        
+
         val preferredUpper = preferred.uppercase()
         val preferredIdx = allBackends.indexOfFirst { it.name == preferredUpper }
-        
+
         return if (preferredIdx > 0) {
             // Move preferred to front, keep rest in order
             listOf(allBackends[preferredIdx]) + allBackends.filterIndexed { i, _ -> i != preferredIdx }
@@ -144,13 +125,18 @@ class LiteRTLMManager private constructor(private val context: Context) {
     /**
      * Try each backend in order; stop at the first one that works.
      */
-    private fun initializeEngineWithFallback(modelPath: String, backends: List<BackendFactory>) {
+    private fun initializeEngineWithFallback(
+        modelPath: String,
+        backends: List<BackendFactory>,
+        supportsImage: Boolean,
+        supportsAudio: Boolean
+    ) {
         var lastError: Throwable? = null
-        
+
         for (factory in backends) {
             try {
                 Log.i(TAG, "Trying backend: ${factory.name}")
-                initializeEngine(modelPath, factory)
+                initializeEngine(modelPath, factory, supportsImage, supportsAudio)
                 Log.i(TAG, "Backend ${factory.name} SUCCEEDED")
                 return
             } catch (e: Throwable) {
@@ -158,11 +144,16 @@ class LiteRTLMManager private constructor(private val context: Context) {
                 lastError = e
             }
         }
-        
+
         throw lastError ?: IllegalStateException("All backends failed")
     }
 
-    private fun initializeEngine(modelPath: String, factory: BackendFactory) {
+    private fun initializeEngine(
+        modelPath: String,
+        factory: BackendFactory,
+        supportsImage: Boolean,
+        supportsAudio: Boolean
+    ) {
         val file = File(modelPath)
         if (!file.exists()) {
             throw java.io.FileNotFoundException("Model file not found at $modelPath")
@@ -172,34 +163,51 @@ class LiteRTLMManager private constructor(private val context: Context) {
         }
         Log.i(TAG, "Model file: ${file.length()} bytes, backend: ${factory.name}")
 
-        val backend = factory.create()
-        
-        Log.i(TAG, "Initializing Engine with backend: ${factory.name}")
-        
-        // CRITICAL for NPU on some devices: point to where SKEL files are
-        try {
-            val libDir = factory.nativeLibraryDir ?: context.applicationInfo.nativeLibraryDir
-            android.system.Os.setenv("ADSP_LIBRARY_PATH", libDir, true)
-            Log.i(TAG, "Set ADSP_LIBRARY_PATH to $libDir")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to set ADSP_LIBRARY_PATH: ${e.message}")
+        val libDir = factory.nativeLibraryDir ?: context.applicationInfo.nativeLibraryDir
+        if (factory.name == "NPU") {
+            configureNativeRuntime(libDir)
         }
 
+        val backend = factory.create()
+
+        Log.i(TAG, "Initializing Engine with backend: ${factory.name}")
+
+        val visionBackend = if (!supportsImage) {
+            null
+        } else if (factory.name == "NPU") {
+            Backend.NPU(nativeLibraryDir = libDir)
+        } else {
+            Backend.CPU()
+        }
+        val visionBackendName = if (!supportsImage) "none" else if (factory.name == "NPU") "NPU" else "CPU"
+        val audioBackend = if (supportsAudio) Backend.CPU() else null
+        val audioBackendName = if (supportsAudio) "CPU" else "none"
         val engineConfig = EngineConfig(
             modelPath = modelPath,
             backend = backend,
+            // Multimodal LiteRT-LM packages require a vision executor for
+            // image prompts. Keep vision on NPU for SM8750 NPU model runs.
+            visionBackend = visionBackend,
+            // The packaged LiteRT-LM audio executor supports CPU/GPU, but not NPU.
+            // Use CPU for Gemma audio; leave it unset for image-only models.
+            audioBackend = audioBackend,
+            maxNumImages = 1,
             // Cache dir is CRITICAL for JIT compilation
             cacheDir = context.cacheDir.path
         )
-        
+        Log.i(
+            TAG,
+            "Engine config: text=${factory.name}, vision=$visionBackendName, audio=$audioBackendName, maxNumImages=1"
+        )
+
         val startTime = System.currentTimeMillis()
         val candidateEngine = Engine(engineConfig)
-        
+
         try {
             candidateEngine.initialize()
             val duration = System.currentTimeMillis() - startTime
             Log.i(TAG, "Engine initialization SUCCEEDED in ${duration}ms")
-            
+
             // Verify conversation works
             val testConv = candidateEngine.createConversation(ConversationConfig())
             testConv.close()
@@ -217,6 +225,23 @@ class LiteRTLMManager private constructor(private val context: Context) {
         currentBackendName = factory.name
     }
 
+    @Synchronized
+    private fun configureNativeRuntime(nativeLibraryDir: String) {
+        if (nativeRuntimeConfigured) {
+            return
+        }
+
+        try {
+            android.system.Os.setenv("LD_LIBRARY_PATH", nativeLibraryDir, true)
+            android.system.Os.setenv("ADSP_LIBRARY_PATH", nativeLibraryDir, true)
+            Log.i(TAG, "Set native library paths to $nativeLibraryDir")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to set native library paths: ${e.message}")
+        }
+
+        nativeRuntimeConfigured = true
+    }
+
     /**
      * Start a new conversation.
      */
@@ -224,15 +249,11 @@ class LiteRTLMManager private constructor(private val context: Context) {
         if (!isInitialized || engine == null) {
             throw IllegalStateException("Engine not initialized.")
         }
-        
+
         val conversationConfig = ConversationConfig(
-            systemInstruction = if (systemPrompt != null) Contents.of(systemPrompt) else null,
-            samplerConfig = SamplerConfig(
-                temperature = 0.7,
-                topK = 40,
-                topP = 0.9
-            )
+            systemInstruction = if (systemPrompt != null) Contents.of(systemPrompt) else null
         )
+        Log.i(TAG, "Starting conversation with model/runtime default sampler on $currentBackendName")
         conversation = engine?.createConversation(conversationConfig)
     }
 
@@ -242,7 +263,7 @@ class LiteRTLMManager private constructor(private val context: Context) {
     fun sendMessage(text: String): Flow<String> {
         ensureConversation()
         return conversation!!.sendMessageAsync(text).map { msg ->
-            msg.toString()
+            msg.extractText()
         }
     }
 
@@ -250,35 +271,58 @@ class LiteRTLMManager private constructor(private val context: Context) {
      * Send a multimodal message with optional image and/or audio.
      * @param text The text prompt
      * @param imagePath Optional path to an image file
-     * @param audioBytes Optional raw audio bytes
+     * @param audioPath Optional path to an audio file
      */
     fun sendMultimodalMessage(
         text: String,
         imagePath: String? = null,
-        audioBytes: ByteArray? = null
+        audioPath: String? = null
     ): Flow<String> {
         ensureConversation()
-        
+
         val contentParts = mutableListOf<Content>()
-        
+
         // Add image if provided
         if (imagePath != null) {
+            val imageFile = File(imagePath)
+            Log.i(
+                TAG,
+                "Adding image content: path=$imagePath exists=${imageFile.exists()} size=${imageFile.length()}"
+            )
             contentParts.add(Content.ImageFile(imagePath))
         }
-        
+
         // Add audio if provided
-        if (audioBytes != null) {
-            contentParts.add(Content.AudioBytes(audioBytes))
+        if (audioPath != null) {
+            val audioFile = File(audioPath)
+            Log.i(
+                TAG,
+                "Adding audio content: path=$audioPath exists=${audioFile.exists()} size=${audioFile.length()}"
+            )
+            contentParts.add(Content.AudioFile(audioPath))
         }
-        
+
         // Always add text
         contentParts.add(Content.Text(text))
-        
+
         val contents = Contents.of(*contentParts.toTypedArray())
-        
+
         return conversation!!.sendMessageAsync(contents).map { msg ->
-            msg.toString()
+            msg.extractText()
         }
+    }
+
+    private fun Message.extractText(): String {
+        val text = contents.contents.joinToString(separator = "") { content ->
+            when (content) {
+                is Content.Text -> content.text
+                else -> ""
+            }
+        }
+        if (text.isEmpty()) {
+            Log.w(TAG, "Received non-text or empty message chunk: $this")
+        }
+        return text
     }
 
     private fun ensureConversation() {
@@ -296,7 +340,7 @@ class LiteRTLMManager private constructor(private val context: Context) {
         val runtime = Runtime.getRuntime()
         return (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
     }
-    
+
     fun cleanup() {
         try {
             conversation?.close()

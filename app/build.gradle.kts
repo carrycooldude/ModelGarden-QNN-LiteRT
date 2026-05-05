@@ -39,7 +39,6 @@ android {
     buildFeatures {
         viewBinding = true
     }
-
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -58,17 +57,6 @@ dependencies {
     
     // LiteRT-LM
     implementation(libs.litertlm.android)
-    
-    // Standard LiteRT for Embeddings
-    implementation(libs.litert.core)
-
-
-    implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.16.1") {
-        exclude(group = "org.tensorflow", module = "tensorflow-lite")
-        exclude(group = "org.tensorflow", module = "tensorflow-lite-api")
-    }
-    implementation("com.qualcomm.qti:qnn-litert-delegate:2.44.0")
-    // implementation(libs.litert.gpu)
     
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
